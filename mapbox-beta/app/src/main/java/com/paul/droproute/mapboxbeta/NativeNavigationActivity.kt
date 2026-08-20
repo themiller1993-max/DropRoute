@@ -11,6 +11,7 @@ import android.location.LocationManager
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.Gravity
+import android.view.View
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.FrameLayout
@@ -24,9 +25,11 @@ import com.mapbox.maps.CameraOptions
 import com.mapbox.maps.MapView
 import com.mapbox.maps.Style
 import com.mapbox.maps.TileStoreUsageMode
+import com.mapbox.maps.extension.style.layers.addLayer
 import com.mapbox.maps.extension.style.layers.generated.LineLayer
 import com.mapbox.maps.extension.style.layers.properties.generated.LineCap
 import com.mapbox.maps.extension.style.layers.properties.generated.LineJoin
+import com.mapbox.maps.extension.style.sources.addSource
 import com.mapbox.maps.extension.style.sources.generated.GeoJsonSource
 import com.mapbox.maps.mapsOptions
 import com.mapbox.maps.plugin.locationcomponent.location
@@ -51,9 +54,11 @@ class NativeNavigationActivity : Activity(), LocationListener {
     private lateinit var breakBtn: Button
     private lateinit var payload: JSONObject
     private var token = ""
+    private var kind = "stop"
     private var targetLat = Double.NaN
     private var targetLon = Double.NaN
     private var arrived = false
+    private var breakActive = false
     private var lastLoc: Location? = null
     private var routeSource: GeoJsonSource? = null
     private var routeCoords: List<Point> = emptyList()
@@ -73,9 +78,11 @@ class NativeNavigationActivity : Activity(), LocationListener {
         }
         MapboxOptions.accessToken = token
         MapboxOptions.mapsOptions.tileStoreUsageMode = TileStoreUsageMode.READ_ONLY
+        kind = payload.optString("kind", "stop")
         targetLat = payload.optJSONObject("target")?.optDouble("lat", Double.NaN) ?: Double.NaN
         targetLon = payload.optJSONObject("target")?.optDouble("lon", Double.NaN) ?: Double.NaN
         arrived = payload.optBoolean("arrived", false)
+        breakActive = payload.optBoolean("breakActive", false)
         buildUi()
         loadInitialRoute()
         startLocation()
@@ -108,11 +115,13 @@ class NativeNavigationActivity : Activity(), LocationListener {
         val bottom = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(10),dp(10),dp(10),dp(12)); setBackgroundColor(Color.argb(245,255,255,255)) }
         val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         arriveBtn = actionButton("📍 At location") { finishAction("arrive") }
-        breakBtn = actionButton("☕ Break") { finishAction("break") }
+        breakBtn = actionButton(if (breakActive) "☕ Break active" else "☕ Break") { finishAction("break") }
+        breakBtn.isEnabled = !breakActive
         row1.addView(arriveBtn, LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginEnd=dp(5) })
         row1.addView(breakBtn, LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart=dp(5) })
         val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        deliveredBtn = actionButton("✓ Delivered") { finishAction("delivered") }
+        val mainLabel = when(kind) { "fuel" -> "⛽ Fuel stop"; "final" -> "🏁 Finish day"; else -> "✓ Delivered" }
+        deliveredBtn = actionButton(mainLabel) { if (kind == "stop") finishAction("delivered") else finishAction("special") }
         undeliveredBtn = actionButton("✕ Undelivered") { finishAction("undelivered") }
         row2.addView(deliveredBtn, LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginEnd=dp(5) })
         row2.addView(undeliveredBtn, LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart=dp(5) })
@@ -192,10 +201,18 @@ class NativeNavigationActivity : Activity(), LocationListener {
     private fun refreshActionState() {
         val l = lastLoc
         val near = l != null && targetLat.isFinite() && targetLon.isFinite() && haversine(l.latitude,l.longitude,targetLat,targetLon) <= 350.0 + min(120.0, l.accuracy.toDouble())
-        arriveBtn.isEnabled = near && !arrived
-        arriveBtn.text = if (arrived) "✓ Arrived" else "📍 At location"
-        deliveredBtn.isEnabled = near && arrived
-        undeliveredBtn.isEnabled = near && arrived
+        if (kind == "stop") {
+            arriveBtn.visibility = View.VISIBLE
+            undeliveredBtn.visibility = View.VISIBLE
+            arriveBtn.isEnabled = near && !arrived && !breakActive
+            arriveBtn.text = if (arrived) "✓ Arrived" else "📍 At location"
+            deliveredBtn.isEnabled = near && arrived && !breakActive
+            undeliveredBtn.isEnabled = near && arrived && !breakActive
+        } else {
+            arriveBtn.visibility = View.GONE
+            undeliveredBtn.visibility = View.GONE
+            deliveredBtn.isEnabled = near && !breakActive
+        }
     }
 
     private fun fetchLiveRoute(loc: Location) {
