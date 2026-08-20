@@ -2,6 +2,8 @@ name: Build Mapbox Beta
 on:
   push:
     branches: [mapbox-v1.3-beta]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 jobs:
   build:
