@@ -25,3 +25,19 @@ jobs:
         with:
           name: DropRoute-Mapbox-Beta
           path: mapbox-beta/app/build/outputs/apk/debug/app-debug.apk
+      - name: Stage Android signing tools
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p /tmp/droproute-sign-tools/lib
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -maxdepth 2 -type f -name apksigner | sort -V | tail -n 1)"
+          BT="$(dirname "$APKSIGNER")"
+          cp "$APKSIGNER" /tmp/droproute-sign-tools/apksigner
+          cp "$BT/lib/apksigner.jar" /tmp/droproute-sign-tools/lib/apksigner.jar
+          cp "$BT/zipalign" /tmp/droproute-sign-tools/zipalign
+          chmod +x /tmp/droproute-sign-tools/apksigner /tmp/droproute-sign-tools/zipalign
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Android-Signing-Tools
+          path: /tmp/droproute-sign-tools
