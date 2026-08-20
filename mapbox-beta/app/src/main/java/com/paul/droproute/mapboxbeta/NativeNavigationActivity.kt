@@ -1,7 +1,6 @@
 package com.paul.droproute.mapboxbeta
 
 import android.Manifest
-import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -18,6 +17,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
 import com.mapbox.common.MapboxOptions
 import com.mapbox.geojson.LineString
 import com.mapbox.geojson.Point
@@ -40,7 +40,7 @@ import java.net.URL
 import java.util.concurrent.Executors
 import kotlin.math.*
 
-class NativeNavigationActivity : Activity(), LocationListener {
+class NativeNavigationActivity : AppCompatActivity(), LocationListener {
     private lateinit var mapView: MapView
     private lateinit var locationManager: LocationManager
     private lateinit var titleView: TextView
