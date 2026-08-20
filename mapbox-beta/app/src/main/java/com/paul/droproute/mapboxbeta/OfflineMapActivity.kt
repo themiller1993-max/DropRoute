@@ -52,8 +52,8 @@ class OfflineMapActivity : Activity() {
 
     private val cancelables = mutableListOf<Cancelable>()
     private var downloading = false
-    private var styleDone = false
-    private var chunksDone = false
+    private var failureLatched = false
+    private var closing = false
     private var stylePc = 0
     private var chunkIndex = 0
     private var chunkPc = 0
@@ -104,7 +104,7 @@ class OfflineMapActivity : Activity() {
             setTypeface(typeface, 1)
         }
         val info = TextView(this).apply {
-            text = "One offline driving map for the whole island. DropRoute downloads it as 4 smaller internal regions so a large download cannot overwhelm the map engine."
+            text = "One offline driving map for the whole island. DropRoute downloads it as 4 smaller internal regions."
             textSize = 13f
             setTextColor(Color.DKGRAY)
             setPadding(0, dp(8), 0, dp(12))
@@ -120,7 +120,7 @@ class OfflineMapActivity : Activity() {
             progress = 0
         }
         val detail = TextView(this).apply {
-            text = "Whole-island pack • driving detail • zoom 5–12\nKeep DropRoute open while the first download completes."
+            text = "Whole-island pack • driving detail • zoom 5–12\nThe style downloads first, then each map region one at a time."
             textSize = 11f
             setTextColor(Color.GRAY)
             setPadding(0, dp(8), 0, dp(8))
@@ -182,7 +182,7 @@ class OfflineMapActivity : Activity() {
                             status.text = "Partial download ($count/${regions.size}) • tap Resume"
                             mainButton.text = "Resume"
                             deleteButton.isEnabled = true
-                            progress.progress = (count * 100 / regions.size)
+                            progress.progress = count * 100 / regions.size
                         }
                         else -> {
                             status.text = "Not downloaded"
@@ -199,32 +199,39 @@ class OfflineMapActivity : Activity() {
     private fun downloadOrUpdate() {
         if (downloading) return
         try {
+            cancelCurrentWork()
             downloading = true
-            styleDone = false
-            chunksDone = false
+            failureLatched = false
             stylePc = 0
             chunkIndex = 0
             chunkPc = 0
-            cancelables.forEach { it.cancel() }
-            cancelables.clear()
-
             mainButton.isEnabled = false
             deleteButton.isEnabled = false
             status.text = "Preparing Mapbox offline data…"
             progress.progress = 0
 
+            // Remove only the obsolete v1 region. Existing v2 chunks are kept so Resume can reuse them.
             tileStore.removeTileRegion(LEGACY_REGION_ID)
 
             val descriptor = offline.createTilesetDescriptor(
                 TilesetDescriptorOptions.Builder()
                     .styleURI(Style.STANDARD)
-                    .pixelRatio(resources.displayMetrics.density.coerceAtLeast(2f))
+                    .pixelRatio(1.0f)
                     .minZoom(5)
                     .maxZoom(12)
                     .build()
             )
 
-            val styleCancelable = offline.loadStylePack(
+            startStyleDownload(descriptor)
+        } catch (t: Throwable) {
+            failOnce("Could not start: ${safeMessage(t)}")
+        }
+    }
+
+    private fun startStyleDownload(descriptor: TilesetDescriptor) {
+        status.text = "Downloading map style…"
+        try {
+            val c = offline.loadStylePack(
                 Style.STANDARD,
                 StylePackLoadOptions.Builder()
                     .glyphsRasterizationMode(GlyphsRasterizationMode.IDEOGRAPHS_RASTERIZED_LOCALLY)
@@ -233,6 +240,7 @@ class OfflineMapActivity : Activity() {
                     .build(),
                 { p ->
                     runOnUiThread {
+                        if (!downloading || failureLatched || closing) return@runOnUiThread
                         val total = p.requiredResourceCount.coerceAtLeast(1)
                         stylePc = (100.0 * p.completedResourceCount / total).roundToInt().coerceIn(0, 100)
                         renderProgress("Downloading map style… $stylePc%")
@@ -240,39 +248,53 @@ class OfflineMapActivity : Activity() {
                 },
                 { result ->
                     runOnUiThread {
+                        if (!downloading || failureLatched || closing) return@runOnUiThread
                         if (result.error != null) {
-                            downloadFailed("Style download: ${result.error}")
+                            failOnce("Style download: ${result.error}")
                         } else {
                             stylePc = 100
-                            styleDone = true
-                            renderProgress("Map style ready • downloading road data…")
-                            finishIfReady()
+                            renderProgress("Map style ready • checking saved regions…")
+                            // Important: only start tile downloads after the style pack has finished.
+                            startFirstMissingChunk(descriptor)
                         }
                     }
                 }
             )
-            cancelables.add(styleCancelable)
-
-            startChunkDownload(descriptor, 0)
+            cancelables.add(c)
         } catch (t: Throwable) {
-            downloadFailed("Could not start: ${safeMessage(t)}")
+            failOnce("Style download: ${safeMessage(t)}")
         }
     }
 
-    private fun startChunkDownload(descriptor: TilesetDescriptor, index: Int) {
-        if (!downloading) return
-        if (index >= regions.size) {
-            chunksDone = true
-            chunkIndex = regions.size
-            chunkPc = 100
-            finishIfReady()
+    private fun startFirstMissingChunk(descriptor: TilesetDescriptor) {
+        tileStore.getAllTileRegions { expected ->
+            runOnUiThread {
+                if (!downloading || failureLatched || closing) return@runOnUiThread
+                val existing = expected.value?.map { it.id }?.toSet().orEmpty()
+                val first = regions.indexOfFirst { !existing.contains(it.id) }
+                if (first < 0) {
+                    finishSuccess()
+                } else {
+                    startChunkDownload(descriptor, first, existing)
+                }
+            }
+        }
+    }
+
+    private fun startChunkDownload(descriptor: TilesetDescriptor, index: Int, alreadyDone: Set<String>) {
+        if (!downloading || failureLatched || closing) return
+
+        var next = index
+        while (next < regions.size && alreadyDone.contains(regions[next].id)) next++
+        if (next >= regions.size) {
+            finishSuccess()
             return
         }
 
-        chunkIndex = index
+        chunkIndex = next
         chunkPc = 0
-        val r = regions[index]
-        renderProgress("Downloading ${r.label} (${index + 1}/${regions.size})…")
+        val r = regions[next]
+        renderProgress("Downloading ${r.label} (${next + 1}/${regions.size})…")
 
         try {
             val opts = TileRegionLoadOptions.Builder()
@@ -288,42 +310,41 @@ class OfflineMapActivity : Activity() {
                 opts,
                 { p ->
                     runOnUiThread {
+                        if (!downloading || failureLatched || closing) return@runOnUiThread
                         val total = p.requiredResourceCount.coerceAtLeast(1)
                         chunkPc = (100.0 * p.completedResourceCount / total).roundToInt().coerceIn(0, 100)
-                        renderProgress("Downloading ${r.label} (${index + 1}/${regions.size})… $chunkPc%")
+                        renderProgress("Downloading ${r.label} (${next + 1}/${regions.size})… $chunkPc%")
                     }
                 },
                 { result ->
                     runOnUiThread {
+                        if (!downloading || failureLatched || closing) return@runOnUiThread
                         if (result.error != null) {
-                            downloadFailed("${r.label}: ${result.error}")
+                            failOnce("${r.label}: ${result.error}")
                         } else {
                             chunkPc = 100
-                            startChunkDownload(descriptor, index + 1)
+                            val done = alreadyDone + r.id
+                            startChunkDownload(descriptor, next + 1, done)
                         }
                     }
                 }
             )
             cancelables.add(c)
         } catch (t: Throwable) {
-            downloadFailed("${r.label}: ${safeMessage(t)}")
+            failOnce("${r.label}: ${safeMessage(t)}")
         }
     }
 
     private fun renderProgress(message: String) {
-        if (!downloading) return
-        val regionOverall = when {
-            regions.isEmpty() -> 100.0
-            chunkIndex >= regions.size -> 100.0
-            else -> ((chunkIndex * 100.0) + chunkPc) / regions.size
-        }
+        if (!downloading || failureLatched || closing) return
+        val regionOverall = ((chunkIndex * 100.0) + chunkPc) / regions.size
         val overall = (stylePc * 0.20 + regionOverall * 0.80).roundToInt().coerceIn(0, 100)
         progress.progress = overall
         status.text = message
     }
 
-    private fun finishIfReady() {
-        if (!styleDone || !chunksDone || !downloading) return
+    private fun finishSuccess() {
+        if (!downloading || failureLatched || closing) return
         downloading = false
         cancelables.clear()
         progress.progress = 100
@@ -333,25 +354,32 @@ class OfflineMapActivity : Activity() {
         deleteButton.isEnabled = true
     }
 
-    private fun downloadFailed(msg: String) {
-        if (!::status.isInitialized) return
+    private fun failOnce(msg: String) {
+        if (failureLatched || closing) return
+        failureLatched = true
         downloading = false
-        cancelables.forEach {
-            try { it.cancel() } catch (_: Throwable) { }
-        }
-        cancelables.clear()
+        val original = msg
+        cancelCurrentWork()
         mainButton.isEnabled = true
         mainButton.text = "Resume"
         deleteButton.isEnabled = true
-        status.text = "Download stopped • $msg"
-        Toast.makeText(this, "Offline map stopped safely. You can tap Resume.", Toast.LENGTH_LONG).show()
+        status.text = "Download stopped • $original"
+        Toast.makeText(this, "Offline map stopped safely. The first real error is shown above.", Toast.LENGTH_LONG).show()
+    }
+
+    private fun cancelCurrentWork() {
+        val copy = cancelables.toList()
+        cancelables.clear()
+        copy.forEach {
+            try { it.cancel() } catch (_: Throwable) { }
+        }
     }
 
     private fun deletePack() {
         try {
             downloading = false
-            cancelables.forEach { it.cancel() }
-            cancelables.clear()
+            failureLatched = true
+            cancelCurrentWork()
             tileStore.removeTileRegion(LEGACY_REGION_ID)
             regions.forEach { tileStore.removeTileRegion(it.id) }
             offline.removeStylePack(Style.STANDARD)
@@ -365,16 +393,12 @@ class OfflineMapActivity : Activity() {
         }
     }
 
-    private fun safeMessage(t: Throwable): String = t.message?.take(180) ?: t.javaClass.simpleName
+    private fun safeMessage(t: Throwable): String = t.message?.take(220) ?: t.javaClass.simpleName
     private fun dp(v: Int) = (v * resources.displayMetrics.density).roundToInt()
 
     override fun onDestroy() {
-        if (downloading) {
-            cancelables.forEach {
-                try { it.cancel() } catch (_: Throwable) { }
-            }
-            cancelables.clear()
-        }
+        closing = true
+        cancelCurrentWork()
         super.onDestroy()
     }
 }
