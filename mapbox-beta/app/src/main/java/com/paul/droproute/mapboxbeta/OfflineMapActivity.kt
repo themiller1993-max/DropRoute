@@ -16,6 +16,7 @@ import com.mapbox.common.MapboxOptions
 import com.mapbox.common.NetworkRestriction
 import com.mapbox.common.TileRegionLoadOptions
 import com.mapbox.common.TileStore
+import com.mapbox.common.TilesetDescriptor
 import com.mapbox.geojson.Point
 import com.mapbox.geojson.Polygon
 import com.mapbox.maps.GlyphsRasterizationMode
@@ -23,7 +24,6 @@ import com.mapbox.maps.OfflineManager
 import com.mapbox.maps.Style
 import com.mapbox.maps.StylePackLoadOptions
 import com.mapbox.maps.TileStoreUsageMode
-import com.mapbox.maps.TilesetDescriptor
 import com.mapbox.maps.TilesetDescriptorOptions
 import com.mapbox.maps.mapsOptions
 import kotlin.math.roundToInt
@@ -213,7 +213,6 @@ class OfflineMapActivity : Activity() {
             status.text = "Preparing Mapbox offline data…"
             progress.progress = 0
 
-            // Clean up the single huge v1 region if a failed beta attempt left one behind.
             tileStore.removeTileRegion(LEGACY_REGION_ID)
 
             val descriptor = offline.createTilesetDescriptor(
@@ -254,7 +253,6 @@ class OfflineMapActivity : Activity() {
             )
             cancelables.add(styleCancelable)
 
-            // Start region downloads from the UI thread, matching Mapbox's supported offline flow.
             startChunkDownload(descriptor, 0)
         } catch (t: Throwable) {
             downloadFailed("Could not start: ${safeMessage(t)}")
