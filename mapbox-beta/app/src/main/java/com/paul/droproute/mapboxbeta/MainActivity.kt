@@ -24,7 +24,7 @@ class MainActivity : Activity() {
         web.settings.javaScriptEnabled = true
         web.settings.domStorageEnabled = true
         web.settings.databaseEnabled = true
-        web.settings.geolocationEnabled = true
+        web.settings.setGeolocationEnabled(true)
         web.settings.allowFileAccess = true
         web.settings.allowContentAccess = true
         web.settings.allowUniversalAccessFromFileURLs = true
