@@ -1,0 +1,28 @@
+name: Stage Zipalign Tools
+on:
+  push:
+    branches: [mapbox-v1.3-beta]
+  pull_request:
+    branches: [main]
+jobs:
+  tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stage zipalign and runtime libraries
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p /tmp/zipalign-tools/lib64
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -maxdepth 2 -type f -name apksigner | sort -V | tail -n 1)"
+          BT="$(dirname "$APKSIGNER")"
+          cp "$BT/zipalign" /tmp/zipalign-tools/zipalign
+          cp "$APKSIGNER" /tmp/zipalign-tools/apksigner
+          cp "$BT/lib/apksigner.jar" /tmp/zipalign-tools/apksigner.jar
+          cp "$BT/lib64/libc++.so" /tmp/zipalign-tools/lib64/libc++.so
+          chmod +x /tmp/zipalign-tools/zipalign /tmp/zipalign-tools/apksigner
+          LD_LIBRARY_PATH=/tmp/zipalign-tools/lib64 /tmp/zipalign-tools/zipalign -h >/dev/null 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Portable-Zipalign-Tools
+          path: /tmp/zipalign-tools
