@@ -19,10 +19,9 @@ jobs:
           cp "$BT/zipalign" /tmp/zipalign-tools/zipalign
           cp "$APKSIGNER" /tmp/zipalign-tools/apksigner
           cp "$BT/lib/apksigner.jar" /tmp/zipalign-tools/apksigner.jar
-          LIBCPP="$(find "$ANDROID_HOME" -type f -name libc++.so | head -n 1 || true)"
-          if [ -n "$LIBCPP" ]; then cp "$LIBCPP" /tmp/zipalign-tools/lib64/libc++.so; fi
+          cp "$BT/lib64/libc++.so" /tmp/zipalign-tools/lib64/libc++.so
           chmod +x /tmp/zipalign-tools/zipalign /tmp/zipalign-tools/apksigner
-          ldd /tmp/zipalign-tools/zipalign || true
+          LD_LIBRARY_PATH=/tmp/zipalign-tools/lib64 /tmp/zipalign-tools/zipalign -h >/dev/null 2>&1 || true
       - uses: actions/upload-artifact@v4
         with:
           name: Portable-Zipalign-Tools
